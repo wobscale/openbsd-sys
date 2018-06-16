@@ -76,8 +76,6 @@
 
 #define X86_IPI_HALT			0x00000001
 #define X86_IPI_NOP			0x00000002
-#define X86_IPI_FLUSH_FPU		0x00000004
-#define X86_IPI_SYNCH_FPU		0x00000008
 #define X86_IPI_TLB			0x00000010
 #define X86_IPI_MTRR			0x00000020
 #define X86_IPI_SETPERF			0x00000040
@@ -87,8 +85,8 @@
 
 #define X86_NIPI			10
 
-#define X86_IPI_NAMES { "halt IPI", "nop IPI", "FPU flush IPI", \
-			 "FPU synch IPI", "TLB shootdown IPI", \
+#define X86_IPI_NAMES { "halt IPI", "nop IPI", NULL, \
+			 NULL, "TLB shootdown IPI", \
 			 "MTRR update IPI", "setperf IPI", "ddb IPI", \
 			 "VMM start IPI", "VMM stop IPI" }
 

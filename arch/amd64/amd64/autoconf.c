@@ -130,10 +130,6 @@ cpu_configure(void)
 
 	unmap_startup();
 
-#ifdef MULTIPROCESSOR
-	cpu_init_idle_pcbs();
-#endif
-
 	lcr8(0);
 	spl0();
 	cold = 0;

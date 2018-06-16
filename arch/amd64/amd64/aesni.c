@@ -252,7 +252,9 @@ aesni_newsession(u_int32_t *sidp, struct cryptoini *cri)
 			}
 
 			/* prepare a hash subkey */
+			fpu_kernel_enter();
 			aesni_enc(ses, ses->ses_ghash->H, ses->ses_ghash->H);
+			fpu_kernel_exit();
 			break;
 
 		case CRYPTO_MD5_HMAC:

@@ -46,7 +46,6 @@ struct mdproc {
 };
 
 /* md_flags */
-#define	MDP_USEDFPU	0x0001	/* has used the FPU */
 #define MDP_IRET	0x0002	/* return via iret, not sysret */
 				/* (iret can restore r11 and rcx) */
 

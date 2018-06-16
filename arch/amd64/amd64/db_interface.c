@@ -66,8 +66,8 @@
 #endif
 
 extern label_t *db_recover;
-extern char *trap_type[];
-extern int trap_types;
+extern const char * const trap_type[];
+extern const int trap_types;
 
 #ifdef MULTIPROCESSOR
 struct mutex ddb_mp_mutex =

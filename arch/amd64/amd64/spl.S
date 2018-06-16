@@ -158,18 +158,6 @@ KIDTVEC(doreti)
 	jmp	*IS_RESUME(%rax)
 2:	/* Check for ASTs on exit to user mode. */
 	movl	%ebx,CPUVAR(ILEVEL)
-5:	CHECK_ASTPENDING(%r11)
-	je	3f
-	testb   $SEL_RPL,TF_CS(%rsp)
-	jz	3f
-4:	CLEAR_ASTPENDING(%r11)
-	sti
-	movq	%rsp, %rdi
-	call	_C_LABEL(ast)
-	cli
-	jmp	5b
-3: 	
-#ifdef DIAGNOSTIC
-	movl	$254,%esi
-#endif /* DIAGNOSTIC */
+	testb	$SEL_RPL,TF_CS(%rsp)
+	jnz	intr_user_exit
 	INTRFASTEXIT

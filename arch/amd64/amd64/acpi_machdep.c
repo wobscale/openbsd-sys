@@ -384,7 +384,7 @@ acpi_sleep_cpu(struct acpi_softc *sc, int state)
 	 */
 	if (acpi_savecpu()) {
 		/* Suspend path */
-		fpusave_cpu(curcpu(), 1);
+		KASSERT((curcpu()->ci_flags & CPUF_USERXSTATE) == 0);
 		wbinvd();
 
 #ifdef HIBERNATE
@@ -411,6 +411,7 @@ acpi_sleep_cpu(struct acpi_softc *sc, int state)
 		return (ECANCELED);
 	}
 	/* Resume path */
+	fpureset();
 
 	/* Reset the vectors */
 	sc->sc_facs->wakeup_vector = 0;

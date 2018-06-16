@@ -217,7 +217,7 @@ _C_LABEL(acpi_protected_mode_resume):
 
 	/* Reenable paging by setting the appropriate bits in CR0 */
 	movl    %cr0,%eax
-	orl     $(CR0_PE|CR0_PG|CR0_NE|CR0_TS|CR0_MP|CR0_WP),%eax
+	orl	$CR0_DEFAULT,%eax
 	movl    %eax,%cr0
 
 	/* Flush the prefetch queue again */
