@@ -2009,6 +2009,27 @@ identifycpu(struct cpu_info *ci)
 	}
 
 	/*
+	 * "Mitigation G-2" per AMD's Whitepaper "Software Techniques
+	 * for Managing Speculation on AMD Processors"
+	 *
+	 * By setting MSR C001_1029[1]=1, LFENCE becomes a dispatch
+	 * serializing instruction.
+	 *
+	 * This MSR is available on all AMD families >= 10h, except 11h
+ 	 * where LFENCE is always serializing.
+	 */
+	if (!strcmp(cpu_vendor, "AuthenticAMD")) {
+		if (ci->ci_family >= 0x10 && ci->ci_family != 0x11) {
+			uint64_t msr;
+
+			msr = rdmsr(MSR_DE_CFG);
+#define DE_CFG_SERIALIZE_LFENCE	(1 << 1)
+			msr |= DE_CFG_SERIALIZE_LFENCE;
+			wrmsr(MSR_DE_CFG, msr);
+		}
+	}
+
+	/*
 	 * Attempt to disable Silicon Debug and lock the configuration
 	 * if it's enabled and unlocked.
 	 */
