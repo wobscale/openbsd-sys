@@ -210,7 +210,7 @@ tss_alloc(struct pcb *pcb)
 	int slot;
 
 	slot = gdt_get_slot();
-	setgdt(slot, &pcb->pcb_tss, sizeof(struct pcb) - 1,
+	setgdt(slot, &pcb->pcb_tss, sizeof(struct i386tss) - 1,
 	    SDT_SYS386TSS, SEL_KPL, 0, 0);
 	return GSEL(slot, SEL_KPL);
 }
