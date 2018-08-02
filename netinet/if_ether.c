@@ -75,7 +75,7 @@ struct llinfo_arp {
 
 /* timer values */
 int	arpt_prune = (5 * 60);	/* walk list every 5 minutes */
-int	arpt_keep = (20 * 60);	/* once resolved, cache for 20 minutes */
+int	arpt_keep = (240 * 60);	/* once resolved, cache for 4 hours */
 int	arpt_down = 20;		/* once declared down, don't send for 20 secs */
 
 struct mbuf *arppullup(struct mbuf *m);
