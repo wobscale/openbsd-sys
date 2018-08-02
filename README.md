@@ -1,0 +1,1 @@
+This repository contains the [OpenBSD](https://www.openbsd.org/) kernel, imported from [sys.tar.gz](https://ftp.openbsd.org/pub/OpenBSD/6.3/sys.tar.gz) with [errata patches](https://www.openbsd.org/errata63.html) applied, as well as patches Wobscale has made for the purposes of our router at [SIX](https://www.seattleix.net/).
