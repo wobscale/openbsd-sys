@@ -208,6 +208,7 @@ const struct {
 	{ SEFF0EDX_AVX512_4FMAPS, "AVX512FMAPS" },
 	{ SEFF0EDX_IBRS,	"IBRS,IBPB" },
 	{ SEFF0EDX_STIBP,	"STIBP" },
+	{ SEFF0EDX_L1DF,	"L1DF" },
 	 /* SEFF0EDX_ARCH_CAP (not printed) */
 }, cpu_tpm_eaxfeatures[] = {
 	{ TPM_SENSOR,		"SENSOR" },
@@ -985,6 +986,28 @@ cpu_check_vmm_cap(struct cpu_info *ci)
 		CPUID(CPUID_AMD_SVM_CAP, dummy, dummy, dummy, cap);
 		if (cap & AMD_SVM_NESTED_PAGING_CAP)
 			ci->ci_vmm_flags |= CI_VMM_RVI;
+	}
+
+	/*
+	 * Check "L1 flush on VM entry" (Intel L1TF vuln) semantics
+	 */
+	if (!strcmp(cpu_vendor, "GenuineIntel")) {
+		if (ci->ci_feature_sefflags_edx & SEFF0EDX_L1DF)
+			ci->ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr = 1;
+		else
+			ci->ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr = 0;
+
+		/*
+		 * Certain CPUs may have the vulnerability remedied in
+		 * hardware, check for that and override the setting
+		 * calculated above.
+		 */	
+		if (ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP) {
+			msr = rdmsr(MSR_ARCH_CAPABILITIES);
+			if (msr & ARCH_CAPABILITIES_SKIP_L1DFL_VMENTRY)
+				ci->ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr =
+				    VMX_SKIP_L1D_FLUSH;
+		}
 	}
 }
 #endif /* NVMM > 0 */
