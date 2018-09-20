@@ -640,6 +640,8 @@ restore_host_svm:
 	movw	%ax, %es
 
 	xorq	%rax, %rax
+	lldtw	%ax		/* Host LDT is always 0 */
+
 	popw	%ax		/* ax = saved TR */
 
 	popq	%rdx
