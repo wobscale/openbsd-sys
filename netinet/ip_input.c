@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_input.c,v 1.336 2017/12/29 17:05:25 bluhm Exp $	*/
+/*	$OpenBSD: ip_input.c,v 1.341 2018/09/11 21:04:03 bluhm Exp $	*/
 /*	$NetBSD: ip_input.c,v 1.30 1996/03/16 23:53:58 christos Exp $	*/
 
 /*
@@ -341,9 +341,8 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	}
 
 #if NCARP > 0
-	if (ifp->if_type == IFT_CARP &&
-	    carp_lsdrop(m, AF_INET, &ip->ip_src.s_addr, &ip->ip_dst.s_addr,
-	    (ip->ip_p == IPPROTO_ICMP ? 0 : 1)))
+	if (carp_lsdrop(ifp, m, AF_INET, &ip->ip_src.s_addr,
+	    &ip->ip_dst.s_addr, (ip->ip_p == IPPROTO_ICMP ? 0 : 1)))
 		goto bad;
 #endif
 
@@ -451,8 +450,9 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	}
 
 #if NCARP > 0
-	if (ifp->if_type == IFT_CARP && ip->ip_p == IPPROTO_ICMP &&
-	    carp_lsdrop(m, AF_INET, &ip->ip_src.s_addr, &ip->ip_dst.s_addr, 1))
+	if (ip->ip_p == IPPROTO_ICMP &&
+	    carp_lsdrop(ifp, m, AF_INET, &ip->ip_src.s_addr,
+	    &ip->ip_dst.s_addr, 1))
 		goto bad;
 #endif
 	/*
@@ -947,6 +947,7 @@ insert:
 		nq = LIST_NEXT(q, ipqe_q);
 		pool_put(&ipqent_pool, q);
 		ip_frags--;
+		m_removehdr(t);
 		m_cat(m, t);
 	}
 
@@ -963,13 +964,7 @@ insert:
 	pool_put(&ipq_pool, fp);
 	m->m_len += (ip->ip_hl << 2);
 	m->m_data -= (ip->ip_hl << 2);
-	/* some debugging cruft by sklower, below, will go away soon */
-	if (m->m_flags & M_PKTHDR) { /* XXX this should be done elsewhere */
-		int plen = 0;
-		for (t = m; t; t = t->m_next)
-			plen += t->m_len;
-		m->m_pkthdr.len = plen;
-	}
+	m_calchdrlen(m);
 	return (m);
 
 dropfrag:
@@ -1384,7 +1379,7 @@ ip_stripoptions(struct mbuf *m)
 	ip->ip_len = htons(ntohs(ip->ip_len) - olen);
 }
 
-const int inetctlerrmap[PRC_NCMDS] = {
+const u_char inetctlerrmap[PRC_NCMDS] = {
 	0,		0,		0,		0,
 	0,		EMSGSIZE,	EHOSTDOWN,	EHOSTUNREACH,
 	EHOSTUNREACH,	EHOSTUNREACH,	ECONNREFUSED,	ECONNREFUSED,
@@ -1623,6 +1618,7 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (error);
 #ifdef IPSEC
 	case IPCTL_ENCDEBUG:
+	case IPCTL_IPSEC_STATS:
 	case IPCTL_IPSEC_EXPIRE_ACQUIRE:
 	case IPCTL_IPSEC_EMBRYONIC_SA_TIMEOUT:
 	case IPCTL_IPSEC_REQUIRE_PFS:

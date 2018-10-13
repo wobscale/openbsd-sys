@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.94 2018/02/21 19:24:15 guenther Exp $	*/
+/*	$OpenBSD: locore.S,v 1.111 2018/10/07 22:43:06 guenther Exp $	*/
 /*	$NetBSD: locore.S,v 1.13 2004/03/25 18:33:17 drochner Exp $	*/
 
 /*
@@ -128,8 +128,6 @@
  * override user-land alignment before including asm.h
  */
 #define	ALIGN_DATA	.align	8,0xcc
-#define ALIGN_TEXT	.align 16,0x90
-#define _ALIGN_TEXT	ALIGN_TEXT
 
 #include <machine/asm.h>
 
@@ -247,8 +245,7 @@ gdt64_end:
 	.section .rodata
 	.globl	_C_LABEL(sigcode)
 _C_LABEL(sigcode):
-	call	*%rax
-
+	call	1f
 	movq	%rsp,%rdi
 	pushq	%rdi			/* fake return address */
 	movq	$SYS_sigreturn,%rax
@@ -257,6 +254,8 @@ _C_LABEL(sigcode):
 _C_LABEL(sigcoderet):
 	movq	$SYS_exit,%rax
 	syscall
+	_ALIGN_TRAPS
+1:	JMP_RETPOLINE(rax)
 	.globl	_C_LABEL(esigcode)
 _C_LABEL(esigcode):
 
@@ -274,6 +273,7 @@ _C_LABEL(sigfillsiz):
  * Change the global descriptor table.
  */
 NENTRY(lgdt)
+	RETGUARD_SETUP(lgdt, r11)
 	/* Reload the descriptor table. */
 	movq	%rdi,%rax
 	lgdt	(%rax)
@@ -289,6 +289,7 @@ NENTRY(lgdt)
 	popq	%rax
 	pushq	$GSEL(GCODE_SEL, SEL_KPL)
 	pushq	%rax
+	RETGUARD_CHECK(lgdt, r11)
 	lretq
 
 ENTRY(setjmp)
@@ -441,8 +442,26 @@ restore_saved:
 	movq	PCB_RSP(%r13),%rsp
 	movq	PCB_RBP(%r13),%rbp
 
-	movq	PCB_CR3(%r13),%rax
+	/* Stack pivot done, setup RETGUARD */
+	RETGUARD_SETUP_OFF(cpu_switchto, r11, 6*8)
+
+	/* don't switch cr3 to the same thing it already was */
+	movq	%cr3,%rax
+	cmpq	PCB_CR3(%r13),%rax
+	movq	PCB_CR3(%r13),%rax	/* flags from cmpq unchanged */
+	jz	.Lsame_cr3
+
 	movq	%rax,%cr3			/* %rax used below too */
+
+.Lsame_cr3:
+	/*
+	 * If we switched from a userland thread with a shallow call stack
+	 * (e.g interrupt->ast->mi_ast->prempt->mi_switch->cpu_switchto)
+	 * then the RSB may have attacker controlled entries when we switch
+	 * to a deeper call stack in the new thread.  Refill the RSB with
+	 * entries safe to speculate into/through.
+	 */
+	RET_STACK_REFILL_WITH_RCX
 
 	/* Don't bother with the rest if switching to a system process. */
 	testl	$P_SYSTEM,P_FLAG(%r12)
@@ -454,18 +473,18 @@ restore_saved:
 	movq	%rdx,CPUVAR(KERN_RSP)
 	movq	PCB_PMAP(%r13),%rcx
 
+	CODEPATCH_START
 	/*
 	 * Meltdown: iff we're doing separate U+K and U-K page tables,
 	 * then record them in cpu_info for easy access in syscall and
-	 * interrupt trampolines.  XXX code patch this
+	 * interrupt trampolines.
 	 */
-
 	movq	PM_PDIRPA_INTEL(%rcx),%rdx
-	testq	%rdx,%rdx
-	jz	0f			/* yay, no intel suckiness */
+	orq	cr3_reuse_pcid,%rax
+	orq	cr3_pcid_proc_intel,%rdx
 	movq	%rax,CPUVAR(KERN_CR3)
 	movq	%rdx,CPUVAR(USER_CR3)
-0:
+	CODEPATCH_END(CPTAG_MELTDOWN_NOP)
 
 	/* set the new pmap's bit for the cpu */
 	lock
@@ -485,33 +504,31 @@ switch_restored:
 	popq	%r12
 	popq	%rbp
 	popq	%rbx
+	RETGUARD_CHECK(cpu_switchto, r11)
 	ret
 
 ENTRY(cpu_idle_enter)
 	movq	_C_LABEL(cpu_idle_enter_fcn),%rax
 	cmpq	$0,%rax
-	je	1f
-	jmpq	*%rax
-1:
-	ret
-
-ENTRY(cpu_idle_cycle)
-	movq	_C_LABEL(cpu_idle_cycle_fcn),%rax
-	cmpq	$0,%rax
-	je	1f
-	call	*%rax
-	ret
-1:
-	sti
-	hlt
+	jne	retpoline_rax
 	ret
 
 ENTRY(cpu_idle_leave)
 	movq	_C_LABEL(cpu_idle_leave_fcn),%rax
 	cmpq	$0,%rax
-	je	1f
-	jmpq	*%rax
-1:
+	jne	retpoline_rax
+	ret
+
+/* placed here for correct static branch prediction in cpu_idle_* */
+NENTRY(retpoline_rax)
+	JMP_RETPOLINE(rax)
+
+ENTRY(cpu_idle_cycle)
+	movq	_C_LABEL(cpu_idle_cycle_fcn),%rax
+	cmpq	$0,%rax
+	jne	retpoline_rax
+	sti
+	hlt
 	ret
 
 	.globl	_C_LABEL(panic)
@@ -532,10 +549,11 @@ switch_active:
  * Update pcb, saving current processor state.
  */
 ENTRY(savectx)
+	RETGUARD_SETUP(savectx, r11)
 	/* Save stack pointers. */
 	movq	%rsp,PCB_RSP(%rdi)
 	movq	%rbp,PCB_RBP(%rdi)
-
+	RETGUARD_CHECK(savectx, r11)
 	ret
 
 IDTVEC(syscall32)
@@ -543,30 +561,51 @@ IDTVEC(syscall32)
 
 /*
  * syscall insn entry.
+ * Enter here with interrupts blocked; %rcx contains the caller's
+ * %rip and the original rflags has been copied to %r11.  %cs and
+ * %ss have been updated to the kernel segments, but %rsp is still
+ * the user-space value.
+ * First order of business is to swap to the kernel GS.base so that
+ * we can access our struct cpu_info.  After possibly mucking with
+ * pagetables, we switch to our kernel stack.  Once that's in place
+ * we can unblock interrupts and save the rest of the syscall frame.
  */
-IDTVEC(syscall)
+KUTEXT_PAGE_START
+ 	.align	NBPG, 0xcc
+XUsyscall_meltdown:
 	/*
-	 * Enter here with interrupts blocked; %rcx contains the caller's
-	 * %rip and the original rflags has been copied to %r11.  %cs and
-	 * %ss have been updated to the kernel segments, but %rsp is still
-	 * the user-space value.
-	 * First order of business is to swap to the kernel GS.base so that
-	 * we can access our struct cpu_info and use the scratch space there
-	 * to switch to the kernel page tables (thank you, Intel), then
-	 * switch to our kernel stack.  Once that's in place we can
-	 * unblock interrupts and save the rest of the syscall frame.
+	 * This is the real Xsyscall_meltdown page, which is mapped into
+	 * the U-K page tables at the same location as Xsyscall_meltdown
+	 * below.  For this, the Meltdown case, we use the scratch space
+	 * in cpu_info so we can switch to the kernel page tables
+	 * (thank you, Intel), at which point we'll continue at the
+	 * "movq CPUVAR(KERN_RSP),%rax" after Xsyscall below.
+	 * In case the CPU speculates past the mov to cr3, we put a
+	 * retpoline-style pause-jmp-to-pause loop.
 	 */
 	swapgs
-	movq	%r15,CPUVAR(SCRATCH)
-	movq	CPUVAR(KERN_CR3),%r15
-	testq	%r15,%r15
-	jz	Xsyscall_untramp
-	movq	%r15,%cr3
-	jmp	Xsyscall_untramp
+	movq	%rax,CPUVAR(SCRATCH)
+	movq	CPUVAR(KERN_CR3),%rax
+	movq	%rax,%cr3
+0:	pause
+	lfence
+	jmp	0b
+KUTEXT_PAGE_END
 
-NENTRY(Xsyscall_untramp)
-	movq	CPUVAR(KERN_RSP),%r15
-	xchgq	%r15,%rsp
+KTEXT_PAGE_START
+	.align	NBPG, 0xcc
+IDTVEC_NOALIGN(syscall_meltdown)
+	/* pad to match real Xsyscall_meltdown positioning above */
+	movq	CPUVAR(KERN_CR3),%rax
+	movq	%rax,%cr3
+IDTVEC_NOALIGN(syscall)
+	swapgs
+	movq	%rax,CPUVAR(SCRATCH)
+	movq	CPUVAR(KERN_RSP),%rax
+	xchgq	%rax,%rsp
+	movq	%rcx,TF_RCX(%rsp)
+	movq	%rcx,TF_RIP(%rsp)
+	RET_STACK_REFILL_WITH_RCX
 	sti
 
 	/*
@@ -577,14 +616,13 @@ NENTRY(Xsyscall_untramp)
 	 * saved. Then, fill in the rest.
 	 */
 	movq	$(GSEL(GUDATA_SEL, SEL_UPL)),TF_SS(%rsp)
-	movq	%r15,TF_RSP(%rsp)
-	movq	CPUVAR(SCRATCH),%r15
+	movq	%rax,TF_RSP(%rsp)
+	movq	CPUVAR(SCRATCH),%rax
 	INTR_SAVE_MOST_GPRS_NO_ADJ
-	movq	%rcx,TF_RCX(%rsp)
 	movq	%r11, TF_RFLAGS(%rsp)	/* old rflags from syscall insn */
 	movq	$(GSEL(GUCODE_SEL, SEL_UPL)), TF_CS(%rsp)
-	movq	%rcx,TF_RIP(%rsp)
 	movq	%rax,TF_ERR(%rsp)	/* stash syscall # for SPL check */
+	INTR_CLEAR_GPRS
 
 	movq	CPUVAR(CURPROC),%r14
 	movq	%rsp,P_MD_REGS(%r14)	# save pointer to frame
@@ -622,6 +660,8 @@ NENTRY(Xsyscall_untramp)
 	jz	.Lsyscall_restore_fsbase
 
 .Lsyscall_restore_registers:
+	RET_STACK_REFILL_WITH_RCX
+
 	movq	TF_RDI(%rsp),%rdi
 	movq	TF_RSI(%rsp),%rsi
 	movq	TF_R8(%rsp),%r8
@@ -644,31 +684,41 @@ NENTRY(Xsyscall_untramp)
 	 */
 	movq	TF_RDX(%rsp),%rdx
 	movq	TF_RAX(%rsp),%rax
-	movq	%rax,CPUVAR(SCRATCH)
-	movq	CPUVAR(USER_CR3),%rax
-
 	movq	TF_RIP(%rsp),%rcx
 	movq	TF_RFLAGS(%rsp),%r11
 	movq	TF_RSP(%rsp),%rsp
-	testq	%rax,%rax
-	jz	1f
-	jmp	syscall_trampback
-
-KUENTRY(syscall_trampback)
+	CODEPATCH_START
+	movq	%rax,CPUVAR(SCRATCH)
+	movq	CPUVAR(USER_CR3),%rax
+	PCID_SET_REUSE_NOP
 	movq	%rax,%cr3
-1:	movq	CPUVAR(SCRATCH),%rax
+Xsyscall_trampback:
+0:	pause
+	lfence
+	jmp	0b
+	CODEPATCH_END(CPTAG_MELTDOWN_NOP)
 	swapgs
 	sysretq
+KTEXT_PAGE_END
+
+KUTEXT_PAGE_START
+	.space	(Xsyscall_trampback - Xsyscall_meltdown) - \
+		(. - XUsyscall_meltdown), 0xcc
+	movq	%rax,%cr3
+	movq	CPUVAR(SCRATCH),%rax
+	swapgs
+	sysretq
+KUTEXT_PAGE_END
 
 	.text
-	.align	16,0xcc
+	_ALIGN_TRAPS
 	/* in this case, need FS.base but not xstate, rarely happens */
 .Lsyscall_restore_fsbase:	/* CPU doesn't have curproc's FS.base */
 	orl	$CPUF_USERSEGS,CPUVAR(FLAGS)
 	movq	CPUVAR(CURPCB),%rdi
 	jmp	.Lsyscall_restore_fsbase_real
 
-	.align	16,0xcc
+	_ALIGN_TRAPS
 .Lsyscall_restore_xstate:	/* CPU doesn't have curproc's xstate */
 	orl	$(CPUF_USERXSTATE|CPUF_USERSEGS),CPUVAR(FLAGS)
 	movq	CPUVAR(CURPCB),%rdi
@@ -720,7 +770,8 @@ NENTRY(proc_trampoline)
 #endif
 	movl	$IPL_NONE,CPUVAR(ILEVEL)
 	movq	%r13,%rdi
-	call	*%r12
+	movq	%r12,%rax
+	call	retpoline_rax
 	movq	CPUVAR(CURPROC),%r14
 	jmp	.Lsyscall_check_asts
 
@@ -740,7 +791,9 @@ NENTRY(proc_trampoline)
  *  - swapgs
  *  - iretq
  */
-NENTRY(intr_user_exit)
+KTEXT_PAGE_START
+        _ALIGN_TRAPS
+GENTRY(intr_user_exit)
 #ifdef DIAGNOSTIC
 	pushfq
 	popq	%rdx
@@ -774,6 +827,8 @@ intr_user_exit_post_ast:
 	jz	.Lintr_restore_fsbase
 
 .Lintr_restore_registers:
+	RET_STACK_REFILL_WITH_RCX
+
 	movq	TF_RDI(%rsp),%rdi
 	movq	TF_RSI(%rsp),%rsi
 	movq	TF_R8(%rsp),%r8
@@ -804,28 +859,52 @@ intr_user_exit_post_ast:
 	movq	$(GSEL(GUDATA_SEL,SEL_UPL)),IRETQ_SS(%rdx)
 	/* finish with the trap frame */
 	movq	TF_RAX(%rsp),%rax
-	movq	%rax,CPUVAR(SCRATCH)
 	movq	TF_RCX(%rsp),%rcx
 	movq	TF_R11(%rsp),%r11
 	/* switch to the trampoline stack */
 	xchgq	%rdx,%rsp
 	movq	TF_RDX(%rdx),%rdx
+	CODEPATCH_START
+	movq	%rax,CPUVAR(SCRATCH)
 	movq	CPUVAR(USER_CR3),%rax
-	testq	%rax,%rax
-	jz	1f
-	jmp	iretq_tramp
-
-KUENTRY(iretq_tramp)
+	PCID_SET_REUSE_NOP
 	movq	%rax,%cr3
-1:	movq	CPUVAR(SCRATCH),%rax
+Xiretq_trampback:
+KTEXT_PAGE_END
+/* the movq %cr3 switches to this "KUTEXT" page */
+KUTEXT_PAGE_START
+	.space	(Xiretq_trampback - Xsyscall_meltdown) - \
+		(. - XUsyscall_meltdown), 0xcc
+	movq	CPUVAR(SCRATCH),%rax
+.Liretq_swapgs:
+	swapgs
+doreti_iret_meltdown:
+	iretq
+KUTEXT_PAGE_END
+/*
+ * Back to the "KTEXT" page to fill in the speculation trap and the
+ * swapgs+iretq used for non-Meltdown kernels.  This switching back
+ * and forth between segments is so that we can do the .space
+ * calculation below to guarantee the iretq's above and below line
+ * up, so the 'doreti_iret' label lines up with the iretq whether
+ * the CPU is affected by Meltdown or not.
+ */
+KTEXT_PAGE_START
+0:	pause
+	lfence
+	jmp	0b
+	.space	(.Liretq_swapgs - XUsyscall_meltdown) - \
+		(. - Xsyscall_meltdown), 0xcc
+	CODEPATCH_END(CPTAG_MELTDOWN_NOP)
 	swapgs
 
 	.globl	_C_LABEL(doreti_iret)
 _C_LABEL(doreti_iret):
 	iretq
+KTEXT_PAGE_END
 
 	.text
-	.align	16,0xcc
+	_ALIGN_TRAPS
 .Lintr_restore_xstate:		/* CPU doesn't have curproc's xstate */
 	orl	$CPUF_USERXSTATE,CPUVAR(FLAGS)
 	movq	CPUVAR(CURPCB),%rdi
@@ -923,53 +1002,8 @@ NENTRY(intr_fast_exit)
 	movq	TF_RCX(%rsp),%rcx
 	movq	TF_R11(%rsp),%r11
 	movq	TF_RAX(%rsp),%rax
-
-#if !defined(GPROF) && defined(DDBPROF)
-	/*
-	 * If we are returning from a probe trap we need to fix the
-	 * stack layout and emulate the patched instruction.
-	 *
-	 * The code below does that by trashing %rax, so it MUST be
-	 * restored afterward.
-	 */
-	cmpl	$INTR_FAKE_TRAP, TF_ERR(%rsp)
-	je	.Lprobe_fixup
-#endif /* !defined(GPROF) && defined(DDBPROF) */
-
 	addq	$TF_RIP,%rsp
 	iretq
-
-
-#if !defined(GPROF) && defined(DDBPROF)
-.Lprobe_fixup:
-	/* Reserve enough room to emulate "pushq %rbp". */
-	subq	$16, %rsp
-
-	/* Shift hardware-saved registers. */
-	movq	(TF_RIP + 16)(%rsp), %rax
-	movq	%rax, TF_RIP(%rsp)
-	movq	(TF_CS + 16)(%rsp), %rax
-	movq	%rax, TF_CS(%rsp)
-	movq	(TF_RFLAGS + 16)(%rsp), %rax
-	movq	%rax, TF_RFLAGS(%rsp)
-	movq	(TF_RSP + 16)(%rsp), %rax
-	movq	%rax, TF_RSP(%rsp)
-	movq	(TF_SS + 16)(%rsp), %rax
-	movq	%rax, TF_SS(%rsp)
-
-	/* Pull 8 bytes off the stack and store %rbp in the expected location.*/
-	movq	TF_RSP(%rsp), %rax
-	subq	$8, %rax
-	movq	%rax, TF_RSP(%rsp)
-	movq	%rbp, (%rax)
-
-	/* Write back overwritten %rax */
-	movq	(TF_RAX + 16)(%rsp),%rax
-
-	addq	$TF_RIP,%rsp
-	iretq
-#endif /* !defined(GPROF) && defined(DDBPROF) */
-	.text
 
 #ifdef DIAGNOSTIC
 .Lintr_exit_not_blocked:
@@ -1004,9 +1038,12 @@ warn_once:
  *		save current state, but retain it in the FPU
  *	void fpusavereset(sfp)
  *		save current state and reset FPU to initial/kernel state
+ *	int xsetbv_user(reg, mask)
+ *		load specifed %xcr# register, returns 0/1 if okay/it trapped
  */
 
 ENTRY(xrstor_user)
+	RETGUARD_SETUP(xrstor_user, r11)
 	movq	%rsi, %rdx
 	movl	%esi, %eax
 	shrq	$32, %rdx
@@ -1016,23 +1053,28 @@ xrstor_fault:
 	.byte 0x48; fxrstor	(%rdi)		/* really fxrstor64 */
 	CODEPATCH_END(CPTAG_XRSTOR)
 	xorl	%eax, %eax
+	RETGUARD_CHECK(xrstor_user, r11)
 	ret
 NENTRY(xrstor_resume)
 	movl	$1, %eax
+	RETGUARD_CHECK(xrstor_user, r11)
 	ret
 END(xrstor_user)
 
 ENTRY(fpusave)
+	RETGUARD_SETUP(fpusave, r11)
 	movq	xsave_mask(%rip),%rdx
 	movl	%edx,%eax
 	shrq	$32,%rdx
 	CODEPATCH_START
 	.byte 0x48; fxsave	(%rdi)		/* really fxsave64 */
 	CODEPATCH_END(CPTAG_XSAVE)
+	RETGUARD_CHECK(fpusave, r11)
 	ret
 END(fpusave)
 
 ENTRY(fpusavereset)
+	RETGUARD_SETUP(fpusavereset, r11)
 	movq	xsave_mask(%rip),%rdx
 	movl	%edx,%eax
 	shrq	$32,%rdx
@@ -1046,8 +1088,27 @@ ENTRY(fpusavereset)
 	CODEPATCH_START
 	.byte 0x48; fxrstor	(%rdi)		/* really fxrstor64 */
 	CODEPATCH_END(CPTAG_XRSTOR)
+	RETGUARD_CHECK(fpusavereset, r11)
 	ret
 END(fpusavereset)
+
+ENTRY(xsetbv_user)
+	RETGUARD_SETUP(xsetbv_user, r11)
+	movl	%edi, %ecx
+	movq	%rsi, %rdx
+	movl	%esi, %eax
+	shrq	$32, %rdx
+	.globl	xsetbv_fault
+xsetbv_fault:
+	xsetbv
+	xorl	%eax, %eax
+	RETGUARD_CHECK(xsetbv_user, r11)
+	ret
+NENTRY(xsetbv_resume)
+	movl	$1, %eax
+	RETGUARD_CHECK(xsetbv_user, r11)
+	ret
+END(xsetbv_user)
 
 	.section .rodata
 	.globl	_C_LABEL(_xrstor)
@@ -1062,7 +1123,12 @@ _C_LABEL(_xsave):
 _C_LABEL(_xsaveopt):
 	.byte 0x48; xsaveopt	(%rdi)		/* really xsaveopt64 */
 
+	.globl	_C_LABEL(_pcid_set_reuse)
+_C_LABEL(_pcid_set_reuse):
+	orl	$(CR3_REUSE_PCID >> 32),CPUVAR(USER_CR3 + 4)
+
 ENTRY(pagezero)
+	RETGUARD_SETUP(pagezero, r11)
 	movq    $-PAGE_SIZE,%rdx
 	subq    %rdx,%rdi
 	xorq    %rax,%rax
@@ -1074,6 +1140,7 @@ ENTRY(pagezero)
 	addq    $32,%rdx
 	jne     1b
 	sfence
+	RETGUARD_CHECK(pagezero, r11)
 	ret
 
 #if NXEN > 0

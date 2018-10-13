@@ -1,4 +1,4 @@
-/*	$OpenBSD: bios.c,v 1.116 2017/07/15 17:20:56 tedu Exp $	*/
+/*	$OpenBSD: bios.c,v 1.119 2018/08/23 14:47:52 jsg Exp $	*/
 
 /*
  * Copyright (c) 1997-2001 Michael Shalayeff
@@ -122,6 +122,7 @@ bios_bootmac_t	*bios_bootmac;
 #ifdef DDB
 extern int	db_console;
 #endif
+bios_ucode_t	*bios_ucode;
 
 void		smbios_info(char*);
 
@@ -608,6 +609,10 @@ bios_getopt(void)
 			explicit_bzero(bios_bootsr, sizeof(bios_bootsr_t));
 			break;
 
+		case BOOTARG_UCODE:
+			bios_ucode = (bios_ucode_t *)q->ba_arg;
+			break;
+
 		default:
 #ifdef BIOS_DEBUG
 			printf(" unsupported arg (%d) %p", q->ba_type,
@@ -637,7 +642,6 @@ bios32_service(u_int32_t service, bios32_entry_t e, bios32_entry_info_t ei)
 	u_long pa, endpa;
 	vaddr_t va, sva;
 	u_int32_t base, count, off, ent;
-	int slot;
 
 	if (bios32_entry.offset == 0)
 		return 0;
@@ -664,8 +668,7 @@ bios32_service(u_int32_t service, bios32_entry_t e, bios32_entry_info_t ei)
 	/* Store bios32 service kva for cleanup later */
 	bios_softc->bios32_service_va = sva;
 
-	slot = gdt_get_slot();
-	setgdt(slot, (caddr_t)va, BIOS32_END, SDT_MEMERA, SEL_KPL, 1, 0);
+	setgdt(GBIOS32_SEL, (caddr_t)va, BIOS32_END, SDT_MEMERA, SEL_KPL, 1, 0);
 
 	for (pa = trunc_page(BIOS32_START),
 	    va += trunc_page(BIOS32_START);
@@ -682,7 +685,7 @@ bios32_service(u_int32_t service, bios32_entry_t e, bios32_entry_info_t ei)
 		}
 	}
 
-	e->segment = GSEL(slot, SEL_KPL);
+	e->segment = GSEL(GBIOS32_SEL, SEL_KPL);
 	e->offset = (vaddr_t)ent;
 
 	ei->bei_base = base;
@@ -1010,7 +1013,7 @@ smbios_info(char * str)
 	if (sminfop) {
 		infolen = strlen(sminfop) + 1;
 		for (i = 0; i < infolen - 1; i++)
-			add_timer_randomness(sminfop[i]);
+			enqueue_randomness(sminfop[i]);
 		hw_serial = malloc(infolen, M_DEVBUF, M_NOWAIT);
 		if (hw_serial)
 			strlcpy(hw_serial, sminfop, infolen);
@@ -1035,7 +1038,7 @@ smbios_info(char * str)
 			hw_uuid = "Not Set";
 		else {
 			for (i = 0; i < sizeof(sys->uuid); i++)
-				add_timer_randomness(sys->uuid[i]);
+				enqueue_randomness(sys->uuid[i]);
 			hw_uuid = malloc(SMBIOS_UUID_REPLEN, M_DEVBUF,
 			    M_NOWAIT);
 			if (hw_uuid) {

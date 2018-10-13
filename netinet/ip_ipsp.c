@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_ipsp.c,v 1.229 2017/11/06 15:12:43 mpi Exp $	*/
+/*	$OpenBSD: ip_ipsp.c,v 1.232 2018/08/28 15:15:02 mpi Exp $	*/
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr),
@@ -280,6 +280,7 @@ reserve_spi(u_int rdomain, u_int32_t sspi, u_int32_t tspi,
 		tdbp->tdb_satype = SADB_SATYPE_UNSPEC;
 		puttdb(tdbp);
 
+#ifdef IPSEC
 		/* Setup a "silent" expiration (since TDBF_INVALID's set). */
 		if (ipsec_keep_invalid > 0) {
 			tdbp->tdb_flags |= TDBF_TIMER;
@@ -287,6 +288,7 @@ reserve_spi(u_int rdomain, u_int32_t sspi, u_int32_t tspi,
 			timeout_add_sec(&tdbp->tdb_timer_tmo,
 			    ipsec_keep_invalid);
 		}
+#endif
 
 		return spi;
 	}
@@ -706,6 +708,8 @@ puttdb(struct tdb *tdbp)
 	tdbsrc[hashval] = tdbp;
 
 	tdb_count++;
+	if ((tdbp->tdb_flags & (TDBF_INVALID|TDBF_TUNNELING)) == TDBF_TUNNELING)
+		ipsecstat_inc(ipsec_tunnels);
 
 	ipsec_last_added = time_second;
 }
@@ -773,6 +777,11 @@ tdb_unlink(struct tdb *tdbp)
 
 	tdbp->tdb_snext = NULL;
 	tdb_count--;
+	if ((tdbp->tdb_flags & (TDBF_INVALID|TDBF_TUNNELING)) ==
+	    TDBF_TUNNELING) {
+		ipsecstat_dec(ipsec_tunnels);
+		ipsecstat_inc(ipsec_prevtunnels);
+	}
 }
 
 void

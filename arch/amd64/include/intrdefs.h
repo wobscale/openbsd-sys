@@ -1,4 +1,4 @@
-/*	$OpenBSD: intrdefs.h,v 1.17 2018/01/13 15:18:11 mpi Exp $	*/
+/*	$OpenBSD: intrdefs.h,v 1.18 2018/06/05 06:39:11 guenther Exp $	*/
 /*	$NetBSD: intrdefs.h,v 1.2 2003/05/04 22:01:56 fvdl Exp $	*/
 
 #ifndef _AMD64_INTRDEFS_H
