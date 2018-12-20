@@ -1255,7 +1255,7 @@ ip_pcbopts(struct mbuf **pcbopt, struct mbuf *m)
 	 * actual options; move other options back
 	 * and clear it when none present.
 	 */
-	if (m->m_data + m->m_len + sizeof(struct in_addr) >= &m->m_dat[MLEN])
+	if (m_trailingspace(m) < sizeof(struct in_addr))
 		return (EINVAL);
 	cnt = m->m_len;
 	m->m_len += sizeof(struct in_addr);
