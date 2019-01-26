@@ -525,8 +525,6 @@ unveil_add(struct proc *p, struct nameidata *ndp, const char *permissions)
  done:
 	if (ret == 0)
 		unveil_add_traversed_vnodes(p, ndp);
-	unveil_free_traversed_vnodes(ndp);
-	pool_put(&namei_pool, ndp->ni_cnd.cn_pnbuf);
 	return ret;
 }
 
