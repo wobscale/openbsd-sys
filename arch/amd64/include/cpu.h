@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.119 2018/02/21 19:24:15 guenther Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.127 2018/08/21 19:04:40 deraadt Exp $	*/
 /*	$NetBSD: cpu.h,v 1.1 2003/04/26 18:39:39 fvdl Exp $	*/
 
 /*-
@@ -153,7 +153,7 @@ struct cpu_info {
 
 	int		ci_inatomic;
 
-#define ARCH_HAVE_CPU_TOPOLOGY
+#define __HAVE_CPU_TOPOLOGY
 	u_int32_t	ci_smt_id;
 	u_int32_t	ci_core_id;
 	u_int32_t	ci_pkg_id;
@@ -174,7 +174,7 @@ struct cpu_info {
 	struct x86_cache_info ci_cinfo[CAI_COUNT];
 
 	struct	x86_64_tss *ci_tss;
-	char		*ci_gdt;
+	void		*ci_gdt;
 
 	volatile int	ci_ddb_paused;
 #define CI_DDB_RUNNING		0
@@ -320,7 +320,7 @@ void cpu_unidle(struct cpu_info *);
 /*
  * Give a profiling tick to the current process when the user profiling
  * buffer pages are invalid.  On the i386, request an ast to send us
- * through trap(), marking the proc as needing a profiling tick.
+ * through usertrap(), marking the proc as needing a profiling tick.
  */
 #define	need_proftick(p)	aston(p)
 
@@ -353,6 +353,7 @@ extern int cpu_id;
 extern char cpu_vendor[];
 extern int cpuid_level;
 extern int cpuspeed;
+extern int cpu_meltdown;
 
 /* cpu.c */
 extern u_int cpu_mwait_size;
@@ -463,13 +464,5 @@ void mp_setperf_init(void);
 	{ "tscfreq", CTLTYPE_QUAD }, \
 	{ "invarianttsc", CTLTYPE_INT }, \
 }
-
-/*
- * Default cr4 flags.
- * Doesn't really belong here, but doesn't really belong anywhere else
- * either. Just to avoid painful mismatches of cr4 flags since they are
- * set in three different places.
- */
-#define CR4_DEFAULT (CR4_PAE|CR4_PGE|CR4_PSE|CR4_OSFXSR|CR4_OSXMMEXCPT)
 
 #endif /* !_MACHINE_CPU_H_ */

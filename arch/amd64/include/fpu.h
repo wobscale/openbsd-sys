@@ -1,4 +1,4 @@
-/*	$OpenBSD: fpu.h,v 1.12 2017/04/27 06:16:39 mlarkin Exp $	*/
+/*	$OpenBSD: fpu.h,v 1.16 2018/10/07 22:43:06 guenther Exp $	*/
 /*	$NetBSD: fpu.h,v 1.1 2003/04/26 18:39:40 fvdl Exp $	*/
 
 #ifndef	_MACHINE_FPU_H_
@@ -64,7 +64,7 @@ extern uint32_t	fpu_mxcsr_mask;
 extern uint64_t	xsave_mask;
 
 void fpuinit(struct cpu_info *);
-void fputrap(struct trapframe *);
+int fputrap(int _type);
 void fpusave(struct savefpu *);
 void fpusavereset(struct savefpu *);
 void fpu_kernel_enter(void);
@@ -73,6 +73,7 @@ void fpu_kernel_exit(void);
 int	xrstor_user(struct savefpu *_addr, uint64_t _mask);
 #define	fpureset() \
 	xrstor_user(&proc0.p_addr->u_pcb.pcb_savefpu, xsave_mask)
+int	xsetbv_user(uint32_t _reg, uint64_t _mask);
 
 #define fninit()		__asm("fninit")
 #define fwait()			__asm("fwait")

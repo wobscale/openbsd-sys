@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_elf.c,v 1.142 2017/12/30 23:08:29 guenther Exp $	*/
+/*	$OpenBSD: exec_elf.c,v 1.146 2018/08/05 14:23:57 beck Exp $	*/
 
 /*
  * Copyright (c) 1996 Per Fogelstrom
@@ -132,7 +132,6 @@ extern char *syscallnames[];
 struct emul emul_elf = {
 	"native",
 	NULL,
-	sendsig,
 	SYS_syscall,
 	SYS_MAXSYSCALL,
 	sysent,
@@ -148,8 +147,7 @@ struct emul emul_elf = {
 	coredump_elf,
 	sigcode,
 	esigcode,
-	sigcoderet,
-	EMUL_ENABLED | EMUL_NATIVE,
+	sigcoderet
 };
 
 /*
@@ -334,6 +332,7 @@ elf_load_file(struct proc *p, char *path, struct exec_package *epp,
 
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, p);
 	nd.ni_pledge = PLEDGE_RPATH;
+	nd.ni_unveil = UNVEIL_READ;
 	if ((error = namei(&nd)) != 0) {
 		return (error);
 	}

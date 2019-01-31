@@ -1,4 +1,4 @@
-/*	$OpenBSD: identcpu.c,v 1.95 2018/02/21 19:24:15 guenther Exp $	*/
+/*	$OpenBSD: identcpu.c,v 1.109 2018/10/04 05:00:40 guenther Exp $	*/
 /*	$NetBSD: identcpu.c,v 1.1 2003/04/26 18:39:28 fvdl Exp $	*/
 
 /*
@@ -46,6 +46,7 @@
 #include <machine/cpufunc.h>
 
 void	replacesmap(void);
+void	replacemeltdown(void);
 uint64_t cpu_freq(struct cpu_info *);
 void	tsc_timecounter_init(struct cpu_info *, uint64_t);
 #if NVMM > 0
@@ -210,6 +211,7 @@ const struct {
 	{ SEFF0EDX_STIBP,	"STIBP" },
 	{ SEFF0EDX_L1DF,	"L1DF" },
 	 /* SEFF0EDX_ARCH_CAP (not printed) */
+	{ SEFF0EDX_SSBD,	"SSBD" },
 }, cpu_tpm_eaxfeatures[] = {
 	{ TPM_SENSOR,		"SENSOR" },
 	{ TPM_ARAT,		"ARAT" },
@@ -219,6 +221,11 @@ const struct {
 	{ CPUIDEDX_ITSC,	"ITSC" },
 }, cpu_amdspec_ebxfeatures[] = {
 	{ CPUIDEBX_IBPB,	"IBPB" },
+	{ CPUIDEBX_IBRS,	"IBRS" },
+	{ CPUIDEBX_STIBP,	"STIBP" },
+	{ CPUIDEBX_SSBD,	"SSBD" },
+	{ CPUIDEBX_VIRT_SSBD,	"VIRTSSBD" },
+	{ CPUIDEBX_SSBD_NOTREQ,	"SSBDNR" },
 }, cpu_xsave_extfeatures[] = {
 	{ XSAVE_XSAVEOPT,	"XSAVEOPT" },
 	{ XSAVE_XSAVEC,		"XSAVEC" },
@@ -462,7 +469,6 @@ identifycpu(struct cpu_info *ci)
 	int i;
 	char *brandstr_from, *brandstr_to;
 	int skipspace;
-	extern uint32_t cpu_meltdown;
 
 	CPUID(1, ci->ci_signature, val, dummy, ci->ci_feature_flags);
 	CPUID(0x80000000, ci->ci_pnfeatset, dummy, dummy, dummy);
@@ -557,6 +563,9 @@ identifycpu(struct cpu_info *ci)
 		cpu_cpuspeed = cpu_amd64speed;
 	}
 
+	printf(", %02x-%02x-%02x", ci->ci_family, ci->ci_model,
+	    ci->ci_signature & 0x0f);
+
 	printf("\n%s: ", ci->ci_dev->dv_xname);
 
 	for (i = 0; i < nitems(cpu_cpuid_features); i++)
@@ -633,6 +642,7 @@ identifycpu(struct cpu_info *ci)
 
 	printf("\n");
 
+	replacemeltdown();
 	x86_print_cacheinfo(ci);
 
 	/*
@@ -650,9 +660,10 @@ identifycpu(struct cpu_info *ci)
 			uint64_t msr;
 
 			msr = rdmsr(MSR_DE_CFG);
-#define DE_CFG_SERIALIZE_LFENCE	(1 << 1)
-			msr |= DE_CFG_SERIALIZE_LFENCE;
-			wrmsr(MSR_DE_CFG, msr);
+			if ((msr & DE_CFG_SERIALIZE_LFENCE) == 0) {
+				msr |= DE_CFG_SERIALIZE_LFENCE;
+				wrmsr(MSR_DE_CFG, msr);
+			}
 		}
 	}
 
@@ -814,17 +825,32 @@ cpu_topology(struct cpu_info *ci)
 		if (ci->ci_pnfeatset < 0x80000008)
 			goto no_topology;
 
-		CPUID(0x80000008, eax, ebx, ecx, edx);
-		core_bits = (ecx >> 12) & 0xf;
-		if (core_bits == 0)
-			goto no_topology;
-		/* So coreidsize 2 gives 3, 3 gives 7... */
-		core_mask = (1 << core_bits) - 1;
-		/* Core id is the least significant considering mask */
-		ci->ci_core_id = apicid & core_mask;
-		/* Pkg id is the upper remaining bits */
-		ci->ci_pkg_id = apicid & ~core_mask;
-		ci->ci_pkg_id >>= core_bits;
+		if (ci->ci_pnfeatset >= 0x8000001e) {
+			struct cpu_info *ci_other;
+			CPU_INFO_ITERATOR cii;
+
+			CPUID(0x8000001e, eax, ebx, ecx, edx);
+			ci->ci_core_id = ebx & 0xff;
+			ci->ci_pkg_id = ecx & 0xff;
+			ci->ci_smt_id = 0;
+			CPU_INFO_FOREACH(cii, ci_other) {
+				if (ci != ci_other &&
+				    ci_other->ci_core_id == ci->ci_core_id)
+					ci->ci_smt_id++;
+			}
+		} else {
+			CPUID(0x80000008, eax, ebx, ecx, edx);
+			core_bits = (ecx >> 12) & 0xf;
+			if (core_bits == 0)
+				goto no_topology;
+			/* So coreidsize 2 gives 3, 3 gives 7... */
+			core_mask = (1 << core_bits) - 1;
+			/* Core id is the least significant considering mask */
+			ci->ci_core_id = apicid & core_mask;
+			/* Pkg id is the upper remaining bits */
+			ci->ci_pkg_id = apicid & ~core_mask;
+			ci->ci_pkg_id >>= core_bits;
+		}
 	} else if (strcmp(cpu_vendor, "GenuineIntel") == 0) {
 		/* We only support leaf 1/4 detection */
 		if (cpuid_level < 4)

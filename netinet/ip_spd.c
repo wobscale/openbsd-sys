@@ -1,4 +1,4 @@
-/* $OpenBSD: ip_spd.c,v 1.96 2017/11/20 10:56:52 mpi Exp $ */
+/* $OpenBSD: ip_spd.c,v 1.98 2018/06/25 11:11:41 mpi Exp $ */
 /*
  * The author of this code is Angelos D. Keromytis (angelos@cis.upenn.edu)
  *
@@ -794,7 +794,9 @@ ipsp_acquire_sa(struct ipsec_policy *ipo, union sockaddr_union *gw,
 		return 0;
 	}
 
+#ifdef IPSEC
 	timeout_add_sec(&ipa->ipa_timeout, ipsec_expire_acquire);
+#endif
 
 	TAILQ_INSERT_TAIL(&ipsec_acquire_head, ipa, ipa_next);
 	TAILQ_INSERT_TAIL(&ipo->ipo_acquires, ipa, ipa_ipo_next);
@@ -845,6 +847,8 @@ struct ipsec_acquire *
 ipsec_get_acquire(u_int32_t seq)
 {
 	struct ipsec_acquire *ipa;
+
+	NET_ASSERT_LOCKED();
 
 	TAILQ_FOREACH (ipa, &ipsec_acquire_head, ipa_next)
 		if (ipa->ipa_seq == seq)

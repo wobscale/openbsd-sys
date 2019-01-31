@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_output.c,v 1.236 2018/03/21 14:42:41 bluhm Exp $	*/
+/*	$OpenBSD: ip6_output.c,v 1.239 2018/08/28 15:15:02 mpi Exp $	*/
 /*	$KAME: ip6_output.c,v 1.172 2001/03/25 09:55:56 itojun Exp $	*/
 
 /*
@@ -861,7 +861,7 @@ ip6_copyexthdr(struct mbuf **mp, caddr_t hdr, int hlen)
 	}
 	m->m_len = hlen;
 	if (hdr)
-		bcopy(hdr, mtod(m, caddr_t), hlen);
+		memcpy(mtod(m, caddr_t), hdr, hlen);
 
 	*mp = m;
 	return (0);
@@ -929,7 +929,7 @@ ip6_insert_jumboopt(struct ip6_exthdrs *exthdrs, u_int32_t plen)
 			if (!n)
 				return (ENOBUFS);
 			n->m_len = oldoptlen + JUMBOOPTLEN;
-			bcopy(mtod(mopt, caddr_t), mtod(n, caddr_t),
+			memcpy(mtod(n, caddr_t), mtod(mopt, caddr_t),
 			      oldoptlen);
 			optbuf = mtod(n, u_int8_t *) + oldoptlen;
 			m_freem(mopt);
@@ -2765,6 +2765,7 @@ ip6_output_ipsec_send(struct tdb *tdb, struct mbuf *m, int tunalready, int fwd)
 #if NPF > 0
 	struct ifnet *encif;
 #endif
+	int error;
 
 #if NPF > 0
 	if ((encif = enc_getif(tdb->tdb_rdomain, tdb->tdb_tap)) == NULL ||
@@ -2786,6 +2787,11 @@ ip6_output_ipsec_send(struct tdb *tdb, struct mbuf *m, int tunalready, int fwd)
 	m->m_flags &= ~(M_BCAST | M_MCAST);	/* just in case */
 
 	/* Callee frees mbuf */
-	return ipsp_process_packet(m, tdb, AF_INET6, tunalready);
+	error = ipsp_process_packet(m, tdb, AF_INET6, tunalready);
+	if (error) {
+		ipsecstat_inc(ipsec_odrops);
+		tdb->tdb_odrops++;
+	}
+	return error;
 }
 #endif /* IPSEC */

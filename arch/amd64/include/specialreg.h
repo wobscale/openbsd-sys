@@ -1,4 +1,4 @@
-/*	$OpenBSD: specialreg.h,v 1.69 2018/02/22 20:18:59 bluhm Exp $	*/
+/*	$OpenBSD: specialreg.h,v 1.81 2018/09/11 07:13:23 jsg Exp $	*/
 /*	$NetBSD: specialreg.h,v 1.1 2003/04/26 18:39:48 fvdl Exp $	*/
 /*	$NetBSD: x86/specialreg.h,v 1.2 2003/04/25 21:54:30 fvdl Exp $	*/
 
@@ -72,8 +72,11 @@
 /*
  * bits in CR3
  */
+#define CR3_PCID	0xfffULL
 #define CR3_PWT		(1ULL << 3)
 #define CR3_PCD		(1ULL << 4)
+#define CR3_REUSE_PCID	(1ULL << 63)
+#define CR3_PADDR	0x7ffffffffffff000ULL
 
 /*
  * bits in the pentiums %cr4 register:
@@ -221,6 +224,7 @@
 #define SEFF0EDX_STIBP		0x08000000 /* STIBP Speculation Control */
 #define SEFF0EDX_L1DF		0x10000000 /* L1D_FLUSH */
 #define SEFF0EDX_ARCH_CAP	0x20000000 /* Has IA32_ARCH_CAPABILITIES MSR */
+#define SEFF0EDX_SSBD		0x80000000 /* Spec Store Bypass Disable */
 
 /*
  * Thermal and Power Management (CPUID function 0x6) EAX bits
@@ -303,6 +307,14 @@
  * AMD CPUID function 0x80000008 EBX bits
  */
 #define CPUIDEBX_IBPB		(1ULL << 12)	/* Speculation Control IBPB */
+#define CPUIDEBX_IBRS		(1ULL << 14)	/* Speculation Control IBRS */
+#define CPUIDEBX_STIBP		(1ULL << 15)	/* Speculation Control STIBP */
+#define CPUIDEBX_IBRS_ALWAYSON	(1ULL << 16)	/* IBRS always on mode */
+#define CPUIDEBX_STIBP_ALWAYSON	(1ULL << 17)	/* STIBP always on mode */
+#define CPUIDEBX_IBRS_PREF	(1ULL << 18)	/* IBRS preferred */
+#define CPUIDEBX_SSBD		(1ULL << 24)	/* Speculation Control SSBD */
+#define CPUIDEBX_VIRT_SSBD	(1ULL << 25)	/* Virt Spec Control SSBD */
+#define CPUIDEBX_SSBD_NOTREQ	(1ULL << 26)	/* SSBD not required */
 
 #define	CPUID2FAMILY(cpuid)	(((cpuid) >> 8) & 15)
 #define	CPUID2MODEL(cpuid)	(((cpuid) >> 4) & 15)
@@ -349,7 +361,7 @@
 #define MSR_BIOS_SIGN		0x08b
 #define MSR_PERFCTR0		0x0c1
 #define MSR_PERFCTR1		0x0c2
-#define MSR_FSB_FREQ		0x0cd	/* Core Duo/Solo only */   
+#define MSR_FSB_FREQ		0x0cd	/* Core Duo/Solo only */
 #define MSR_MTRRcap		0x0fe
 #define MTRRcap_FIXED		0x100	/* bit 8 - fixed MTRRs supported */
 #define MTRRcap_WC		0x400	/* bit 10 - WC type supported */
@@ -492,6 +504,7 @@
 /*
  * AMD K8 (Opteron) MSRs.
  */
+#define	MSR_PATCH_LEVEL	0x0000008b
 #define	MSR_SYSCFG	0xc0000010
 
 #define MSR_EFER	0xc0000080	/* Extended feature enable */
@@ -509,10 +522,12 @@
 #define MSR_FSBASE	0xc0000100	/* 64bit offset for fs: */
 #define MSR_GSBASE	0xc0000101	/* 64bit offset for gs: */
 #define MSR_KERNELGSBASE 0xc0000102	/* storage for swapgs ins */
+#define MSR_PATCH_LOADER	0xc0010020
 #define MSR_INT_PEN_MSG	0xc0010055	/* Interrupt pending message */
 
 #define MSR_DE_CFG	0xc0011029	/* Decode Configuration */
 #define	DE_CFG_721	0x00000001	/* errata 721 */
+#define DE_CFG_SERIALIZE_LFENCE	(1 << 1)	/* Enable serializing lfence */
 
 #define IPM_C1E_CMP_HLT	0x10000000
 #define IPM_SMI_CMP_HLT	0x08000000
@@ -556,7 +571,7 @@
  * NCRx+0: A31-A24 of starting address
  * NCRx+1: A23-A16 of starting address
  * NCRx+2: A15-A12 of starting address | NCR_SIZE_xx.
- * 
+ *
  * The non-cacheable region's starting address must be aligned to the
  * size indicated by the NCR_SIZE_xx field.
  */
@@ -1193,7 +1208,7 @@
 #define VMCS_GUEST_IA32_SYSENTER_EIP	0x6826
 
 /* Natural-width host state fields */
-#define VMCS_HOST_IA32_CR0		0x6C00          
+#define VMCS_HOST_IA32_CR0		0x6C00
 #define VMCS_HOST_IA32_CR3		0x6C02
 #define VMCS_HOST_IA32_CR4		0x6C04
 #define VMCS_HOST_IA32_FS_BASE		0x6C06
@@ -1262,6 +1277,8 @@
 	 SVM_CLEANBITS_TPR | SVM_CLEANBITS_NP | SVM_CLEANBITS_CR | \
 	 SVM_CLEANBITS_DR | SVM_CLEANBITS_DT | SVM_CLEANBITS_SEG | \
 	 SVM_CLEANBITS_CR2 | SVM_CLEANBITS_LBR | SVM_CLEANBITS_AVIC )
+
+#define SVM_INTR_MISC_V_IGN_TPR 0x10
 
 /*
  * SVM : VMCB intercepts
@@ -1414,6 +1431,7 @@
 #define XSAVE_XSAVES		0x8UL
 
 /*
- * Default cr0 flags.
+ * Default cr0 and cr4 flags.
  */
 #define CR0_DEFAULT	(CR0_PE|CR0_PG|CR0_NE|CR0_WP)
+#define CR4_DEFAULT	(CR4_PAE|CR4_PGE|CR4_PSE|CR4_OSFXSR|CR4_OSXMMEXCPT)

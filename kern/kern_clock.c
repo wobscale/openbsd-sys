@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_clock.c,v 1.93 2017/07/22 14:33:45 kettenis Exp $	*/
+/*	$OpenBSD: kern_clock.c,v 1.96 2018/10/10 00:04:54 bluhm Exp $	*/
 /*	$NetBSD: kern_clock.c,v 1.34 1996/06/09 04:51:03 briggs Exp $	*/
 
 /*-
@@ -78,20 +78,6 @@
  * If the statistics clock is running fast, it must be divided by the ratio
  * profhz/stathz for statistics.  (For profiling, every tick counts.)
  */
-
-/*
- * Bump a timeval by a small number of usec's.
- */
-#define BUMPTIME(t, usec) { \
-	volatile struct timeval *tp = (t); \
-	long us; \
- \
-	tp->tv_usec = us = tp->tv_usec + (usec); \
-	if (us >= 1000000) { \
-		tp->tv_usec = us - 1000000; \
-		tp->tv_sec++; \
-	} \
-}
 
 int	stathz;
 int	schedhz;
@@ -381,6 +367,7 @@ statclock(struct clockframe *frame)
 			return;
 		/*
 		 * Came from kernel mode, so we were:
+		 * - spinning on a lock
 		 * - handling an interrupt,
 		 * - doing syscall or trap work on behalf of the current
 		 *   user process, or
@@ -391,7 +378,11 @@ statclock(struct clockframe *frame)
 		 * so that we know how much of its real time was spent
 		 * in ``non-process'' (i.e., interrupt) work.
 		 */
-		if (CLKF_INTR(frame)) {
+		if (spc->spc_spinning) {
+			if (p != NULL && p != spc->spc_idleproc)
+				p->p_sticks++;
+			spc->spc_cp_time[CP_SPIN]++;
+		} else if (CLKF_INTR(frame)) {
 			if (p != NULL)
 				p->p_iticks++;
 			spc->spc_cp_time[CP_INTR]++;

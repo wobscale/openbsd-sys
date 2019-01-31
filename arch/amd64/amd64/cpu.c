@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.113 2018/03/13 05:10:40 guenther Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.129 2018/10/04 05:00:40 guenther Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -140,6 +140,7 @@ struct cpu_softc {
 };
 
 void	replacesmap(void);
+void	replacemeltdown(void);
 
 extern long _stac;
 extern long _clac;
@@ -159,6 +160,28 @@ replacesmap(void)
 	codepatch_replace(CPTAG_STAC, &_stac, 3);
 	codepatch_replace(CPTAG_CLAC, &_clac, 3);
 
+	splx(s);
+}
+
+void
+replacemeltdown(void)
+{
+	static int replacedone = 0;
+	int s;
+
+	if (replacedone)
+		return;
+	replacedone = 1;
+
+	s = splhigh();
+	if (!cpu_meltdown)
+		codepatch_nop(CPTAG_MELTDOWN_NOP);
+	else if (pmap_use_pcid) {
+		extern long _pcid_set_reuse;
+		DPRINTF("%s: codepatching PCID use", __func__);
+		codepatch_replace(CPTAG_PCID_SET_REUSE, &_pcid_set_reuse,
+		    PCID_SET_REUSE_SIZE);
+	}
 	splx(s);
 }
 
@@ -354,7 +377,7 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		ci = &cif->cif_cpu;
 #if defined(MULTIPROCESSOR)
 		ci->ci_tss = &cif->cif_tss;
-		ci->ci_gdt = (void *)(ci->ci_tss + 1);
+		ci->ci_gdt = &cif->cif_gdt;
 		memcpy(ci->ci_gdt, cpu_info_primary.ci_gdt, GDT_SIZE);
 		cpu_enter_pages(cif);
 		if (cpu_info[cpunum] != NULL)
@@ -467,8 +490,8 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 
 #if defined(MULTIPROCESSOR)
 		cpu_intr_init(ci);
-		sched_init_cpu(ci);
 		cpu_start_secondary(ci);
+		sched_init_cpu(ci);
 		ncpus++;
 		if (ci->ci_flags & CPUF_PRESENT) {
 			ci->ci_next = cpu_info_list->ci_next;
@@ -547,6 +570,8 @@ cpu_init(struct cpu_info *ci)
 		cr4 |= CR4_UMIP;
 	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && cpuid_level >= 0xd)
 		cr4 |= CR4_OSXSAVE;
+	if (pmap_use_pcid)
+		cr4 |= CR4_PCIDE;
 	lcr4(cr4);
 
 	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && cpuid_level >= 0xd) {
@@ -589,7 +614,7 @@ cpu_init(struct cpu_info *ci)
 #ifdef MULTIPROCESSOR
 	ci->ci_flags |= CPUF_RUNNING;
 	/*
-	 * Big hammer: flush all TLB entries, including ones from PTE's
+	 * Big hammer: flush all TLB entries, including ones from PTEs
 	 * with the G bit set.  This should only be necessary if TLB
 	 * shootdown falls far behind.
 	 */
@@ -676,7 +701,7 @@ cpu_start_secondary(struct cpu_info *ci)
 		atomic_setbits_int(&ci->ci_flags, CPUF_IDENTIFY);
 
 		/* wait for it to identify */
-		for (i = 100000; (ci->ci_flags & CPUF_IDENTIFY) && i > 0; i--)
+		for (i = 2000000; (ci->ci_flags & CPUF_IDENTIFY) && i > 0; i--)
 			delay(10);
 
 		if (ci->ci_flags & CPUF_IDENTIFY)
@@ -784,7 +809,7 @@ cpu_hatch(void *v)
 
 	s = splhigh();
 	lcr8(0);
-	enable_intr();
+	intr_enable();
 
 	nanouptime(&ci->ci_schedstate.spc_runtime);
 	splx(s);
@@ -880,7 +905,7 @@ mp_cpu_start_cleanup(struct cpu_info *ci)
 #endif	/* MULTIPROCESSOR */
 
 typedef void (vector)(void);
-extern vector Xsyscall, Xsyscall32;
+extern vector Xsyscall_meltdown, Xsyscall, Xsyscall32;
 
 void
 cpu_init_msrs(struct cpu_info *ci)
@@ -888,7 +913,8 @@ cpu_init_msrs(struct cpu_info *ci)
 	wrmsr(MSR_STAR,
 	    ((uint64_t)GSEL(GCODE_SEL, SEL_KPL) << 32) |
 	    ((uint64_t)GSEL(GUCODE32_SEL, SEL_UPL) << 48));
-	wrmsr(MSR_LSTAR, (uint64_t)Xsyscall);
+	wrmsr(MSR_LSTAR, cpu_meltdown ? (uint64_t)Xsyscall_meltdown :
+	    (uint64_t)Xsyscall);
 	wrmsr(MSR_CSTAR, (uint64_t)Xsyscall32);
 	wrmsr(MSR_SFMASK, PSL_NT|PSL_T|PSL_I|PSL_C|PSL_D|PSL_AC);
 
@@ -951,8 +977,8 @@ rdrand(void *v)
 
 	if (valid)
 		t.u64 ^= r.u64;
-	add_true_randomness(t.u32[0]);
-	add_true_randomness(t.u32[1]);
+	enqueue_randomness(t.u32[0]);
+	enqueue_randomness(t.u32[1]);
 
 	if (tmo)
 		timeout_add_msec(tmo, 10);
